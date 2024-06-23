@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Document</title>
+    <script src="https://api-maps.yandex.ru/2.1/?apikey=1b31aef9-c517-45af-bb45-e50593d5c699&lang=ru_RU&package.standard,package.route"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="body"></div>
+    <div id='map' class="map">
+    </div>
+    <div class="name" >
+        <h1>Логистический навигатор</h1>
+        <p>Лапин Дмитрий</p>
+    </div>
+    <div class="roads" >
+        <h2>Маршруты:</h2>
+        <select id="roads" class="glow-on-hover">
+            
+        </select>
+        <button class="glow-on-hover" onClick="GetPointsAsync()">Отобразить</button>
+    </div>
+    <div id="points" class="points">
+    </div>
+    <script>
+        var myMap;
+        ymaps.ready(init);
+        GetRoads();
+        var roadsDiv = document.getElementById("roads");
+        var pointsDiv = document.getElementById("points");
+        const apiKey = '1b31aef9-c517-45af-bb45-e50593d5c699';
+        const pointExpr = /^\s*([-+]?\d+(\.\d+)?)\s+([-+]?\d+(\.\d+)?)\s*$/;
+        function init() {
+        myMap = new ymaps.Map ('map', {
+            center: [56.843712, 60.578815],
+            zoom: 12
+            });
+        }
+        async function GetRoads()
+        {
+            const response = await fetch("https://a28011-8ecb.u.d-f.pw/roads", {method :"GET"});
+            const roads = await response.json();
+            roads.forEach(road => {
+                var button = document.createElement("option");
+                button.setAttribute("class","glow-on-hover");
+                button.setAttribute("id",road.id)
+                button.onclick = () => GetPointsAsync(road.id);
+                button.append(road.name);
+                roadsDiv.append(button);
+            });
+        }
+        async function GetPointsAsync()
+        {
+            console.log("hi")
+            pointsDiv.innerHTML = "";
+            var options = roadsDiv.options;
+            var id = options[options.selectedIndex].id;
+            const response = await fetch(`https://a28011-8ecb.u.d-f.pw/roads/${id}`, {method :"GET"});
+            const r = await response.json();
+            const points = r.points;
+            var h = document.createElement("h2");
+            h.append("Точки назначения:");
+            pointsDiv.append(h);
+            points.forEach(point => {
+                var pointDiv = document.createElement("div");
+                pointDiv.setAttribute("class","point");
+                pointDiv.append(point.name);
+                pointsDiv.append(pointDiv);
+            });
+            build(points);
+        }   
+        async function build(points) {
+            const sourcePointDesc = points[0];
+            const placesDesc = points;
+
+            const sourcePoint = await getCoordinates(sourcePointDesc);
+            const path = [];
+
+            for (let place of placesDesc) {
+                const coords = await getCoordinates(place);
+                if (isValidPoint(coords))
+                    path.push(coords);
+            }
+
+            if (!isValidPoint(sourcePoint)) {
+                alert('Некорректный адрес отправления');
+                return;
+            }
+
+            if (path.length === 0) {
+                alert('Некорректные адреса');
+                return;
+            }
+
+            console.log('srcpath', path);
+
+            const shortest = getShortestRoute(sourcePoint, path);
+            console.log('shortest', shortest);
+
+            await renderRoute(sourcePoint, shortest);
+        }
+        async function renderRoute(src, path) {
+            const points = [parsePoint(src)];
+            let first = true;
+            for (let pathItem of path) {
+                points.push({ type: 'wayPoint', point: parsePoint(pathItem) });
+            }
+
+            ymaps.route(points, {
+                mapStateAutoApply: true,
+                reverseGeocoding: true,
+                avoidTrafficJams: true,
+            }).then(function(route) {
+                const points = route.getWayPoints();
+                const lastPoint = points.getLength() - 1;
+                // Задаем стиль метки - иконки будут красного цвета, и
+                // их изображения будут растягиваться под контент.
+                points.options.set('preset', 'islands#redStretchyIcon');
+
+                // Задаем контент меток в начальной и конечной точках.
+                points.get(0).properties.set('iconContent', 'Точка отправления');
+                points.get(lastPoint).properties.set('iconContent', 'Точка прибытия');
+
+                myMap.geoObjects.removeAll();
+                myMap.geoObjects.add(route);
+            });
+        }
+        function parsePoint(point) {
+            const match = point.match(pointExpr);
+            if (!match) {
+                return false;
+            }
+
+            const lat = parseFloat(match[1]);
+            const lon = parseFloat(match[3]);
+
+            return [lon, lat];
+        }
+        function getShortestRoute(source, points) {
+            let minPerm = null;
+            let minPermDist = -1;
+            const perm = makePermutations(points);
+
+            for (let p of perm) {
+                const dist = getTotalDistance([source].concat(p));
+                if (dist < minPermDist || minPermDist === -1) {
+                    minPermDist = dist;
+                    minPerm = p;
+                }
+            }
+
+            return minPerm;
+        }
+        function getTotalDistance(path) {
+            let totalDistance = 0;
+            for (let i = 0; i < path.length - 1; i++) {
+                totalDistance += getDistance(path[i], path[i + 1]);
+            }
+            return totalDistance;
+        }
+        function getDistance(point1, point2) {
+            const [lat1, lon1] = point1.split(' ').map(Number);
+            const [lat2, lon2] = point2.split(' ').map(Number);
+
+            const R = 6371; // Radius of the Earth in kilometers
+            const dLat = toRadians(lat2 - lat1);
+            const dLon = toRadians(lon2 - lon1);
+            const a =
+                Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+            // Distance in kilometers
+            return R * c;
+        }
+        function toRadians(degrees) {
+            return degrees * (Math.PI / 180);
+        }
+        function makePermutations(array) {
+            const result = [];
+
+            function permute(arr, m = []) {
+                if (arr.length === 0) {
+                    result.push(m);
+                } else {
+                    for (let i = 0; i < arr.length; i++) {
+                        let current = arr.slice();
+                        let next = current.splice(i, 1);
+                        permute(current.slice(), m.concat(next));
+                    }
+                }
+            }
+
+            permute(array);
+            return result;
+        }
+        function isValidPoint(point) {
+            const match = point.match(pointExpr);
+            if (!match) {
+                return false;
+            }
+
+            const lat = parseFloat(match[1]);
+            const lon = parseFloat(match[3]);
+
+            if (isNaN(lat) || isNaN(lon)) {
+                return false;
+            }
+
+            return !(lat < -90 || lat > 90 || lon < -180 || lon > 180);
+        }
+        async function getCoordinates(s) {
+            console.log(s);
+            const url = `https://geocode-maps.yandex.ru/1.x/?apikey=${apiKey}&geocode=${encodeURIComponent(s.name)}&format=json&ll=60.607611%2C56.834078`;
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                return data.response.GeoObjectCollection.featureMember[0].GeoObject.Point.pos;
+            } catch (error) {
+                console.error('Error fetching coordinates:', error);
+                return null;
+            }
+        }
+    </script>
+</body>
+</html>
